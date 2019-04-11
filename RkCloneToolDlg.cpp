@@ -170,7 +170,7 @@ BOOL CRkCloneToolDlg::OnDeviceChange(UINT nEventType, DWORD_PTR dwData)
 			pDevInf = (PDEV_BROADCAST_DEVICEINTERFACE)pHdr;
 			if (memcmp(&pDevInf->dbcc_classguid, &UVC, sizeof(GUID)) == 0)
 			{
-				if (wcsstr(pDevInf->dbcc_name, TEXT("VID_2207&PID_320A")))
+				if (wcsstr(pDevInf->dbcc_name, TEXT("VID_2207")))
 				{
 					PSTRUCT_DEVICE_DESC pDevs = NULL;
 					//1.scan device
@@ -205,9 +205,9 @@ BOOL CRkCloneToolDlg::OnDeviceChange(UINT nEventType, DWORD_PTR dwData)
 					{
 						m_bConnected = FALSE;
 						m_szLinkName = TEXT("");
-						m_Prog.SetFrontColor(RGB(0, 224, 0));
-						m_Prog.SetPrefixStr(TEXT(""));
-						m_Prog.SetPos(0);
+						//m_Prog.SetFrontColor(RGB(0, 224, 0));
+						//m_Prog.SetPrefixStr(TEXT(""));
+						//m_Prog.SetPos(0);
 						SetDlgItemText(IDC_STATUS, TEXT("No devices Found!"));
 						TRACE(TEXT("No devices Found!\n"));
 						return 1;
@@ -227,10 +227,14 @@ UINT CRkCloneToolDlg::BurnProc(LPVOID lParam)
 	CRkCloneToolDlg* p = (CRkCloneToolDlg*)lParam;
 	PSTRUCT_DEVICE_DESC pDevs = NULL;
 	EnableMenuItem(::GetSystemMenu(p->m_hWnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_DISABLED);
+	p->GetDlgItem(IDC_STARTADDR)->EnableWindow(0);
+	p->GetDlgItem(IDC_DATALEN)->EnableWindow(0);
 	p->GetDlgItem(IDC_BROWSE)->EnableWindow(0);
 	p->GetDlgItem(IDC_WRITE)->EnableWindow(0);
 	p->GetDlgItem(IDC_READ)->EnableWindow(0);
 	p->BurnImage();
+	p->GetDlgItem(IDC_STARTADDR)->EnableWindow();
+	p->GetDlgItem(IDC_DATALEN)->EnableWindow();
 	p->GetDlgItem(IDC_BROWSE)->EnableWindow();
 	p->GetDlgItem(IDC_WRITE)->EnableWindow();
 	p->GetDlgItem(IDC_READ)->EnableWindow();
@@ -242,10 +246,14 @@ UINT CRkCloneToolDlg::ReadProc(LPVOID lParam)
 {
 	CRkCloneToolDlg* p = (CRkCloneToolDlg*)lParam;
 	EnableMenuItem(::GetSystemMenu(p->m_hWnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_DISABLED);
+	p->GetDlgItem(IDC_STARTADDR)->EnableWindow(0);
+	p->GetDlgItem(IDC_DATALEN)->EnableWindow(0);
 	p->GetDlgItem(IDC_BROWSE)->EnableWindow(0);
 	p->GetDlgItem(IDC_WRITE)->EnableWindow(0);
 	p->GetDlgItem(IDC_READ)->EnableWindow(0);
 	p->ReadImage();
+	p->GetDlgItem(IDC_STARTADDR)->EnableWindow();
+	p->GetDlgItem(IDC_DATALEN)->EnableWindow();
 	p->GetDlgItem(IDC_BROWSE)->EnableWindow();
 	p->GetDlgItem(IDC_WRITE)->EnableWindow();
 	p->GetDlgItem(IDC_READ)->EnableWindow();
@@ -286,13 +294,15 @@ BOOL CRkCloneToolDlg::DownloadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned i
 	DWORD dwTransferBytes, dwProgress, dwLastProgress;
 	ULONGLONG dwFWSize;
 	CString strFile, strPromptText, strFormatText;
-	DWORD dwLen;
+	ULONGLONG dwLen;
 	WCHAR szOffset[MAX_PATH], szLen[MAX_PATH];
 	GetDlgItemText(IDC_STARTADDR, szOffset,MAX_PATH);
 	GetDlgItemText(IDC_DATALEN, szLen,MAX_PATH);
 	uiOffset = wcstoul(szOffset, 0, 16);
 	dwLen = wcstoul(szLen, 0, 16);
-	dwLen = dwLen ? dwLen : 0xffffffff;
+	dwLen = dwLen ? dwLen : (ULONGLONG)-1;
+	CString szReadSector;
+	ULONGLONG dwSecSize;
 
 
 	file.m_hFile = INVALID_HANDLE_VALUE;
@@ -307,13 +317,15 @@ BOOL CRkCloneToolDlg::DownloadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned i
 		goto Exit_DownloadImage;
 	}
 
-	dwFWSize = min(file.GetLength(), dwLen);
+	dwFWSize = min(file.GetLength(), dwLen*SECTOR_SIZE);
+	dwSecSize = ((dwFWSize%SECTOR_SIZE == 0) ? (dwFWSize / SECTOR_SIZE) : (dwFWSize / SECTOR_SIZE + 1));
 	file.SeekToBegin();
 	dwTotalWritten = 0;
 	dwLastProgress = dwProgress = 0;
 	uiBegin = uiOffset;
 	m_Prog.SetFrontColor(RGB(0, 224, 0));
-	m_Prog.SetPrefixStr(TEXT("Write Firmware..."));
+	szReadSector.Format(TEXT("Write [00000000/%08llX]..."), dwSecSize);
+	m_Prog.SetPrefixStr(szReadSector);
 	m_Prog.SetPos(0);
 	while (dwTotalWritten<dwFWSize)
 	{
@@ -339,6 +351,8 @@ BOOL CRkCloneToolDlg::DownloadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned i
 			dwTotalWritten += dwTransferBytes;
 			uiBegin += uiTransferSec;
 			dwProgress = (DWORD)((dwTotalWritten / 1024) * 100 / (dwFWSize / 1024));
+			szReadSector.Format(TEXT("Write [%08llX/%08llX]..."), dwTotalWritten/SECTOR_SIZE, dwSecSize);
+			m_Prog.SetPrefixStr(szReadSector);
 			m_Prog.SetPos((WORD)dwProgress);
 			if (dwProgress != dwLastProgress)
 			{
@@ -354,7 +368,8 @@ BOOL CRkCloneToolDlg::DownloadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned i
 	}
 	Sleep(200);
 	dwLastProgress = dwProgress = 0;
-	m_Prog.SetPrefixStr(TEXT("Verify Firmware..."));
+	szReadSector.Format(TEXT("Verify [00000000/%08llX]..."), dwSecSize);
+	m_Prog.SetPrefixStr(szReadSector);
 	m_Prog.SetPos(0);
 	//skip 0x40 protection sectors
 #if 0
@@ -403,6 +418,8 @@ BOOL CRkCloneToolDlg::DownloadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned i
 		}
 
 		dwProgress = (DWORD)((dwTotalRead / 1024) * 100 / (dwFWSize / 1024));
+		szReadSector.Format(TEXT("Verify [%08llX/%08llX]..."), dwTotalRead / SECTOR_SIZE, dwSecSize);
+		m_Prog.SetPrefixStr(szReadSector);
 		m_Prog.SetPos((WORD)dwProgress);
 		if (dwProgress != dwLastProgress)
 		{
@@ -444,6 +461,7 @@ BOOL CRkCloneToolDlg::UploadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned int
 	ULONGLONG dwTotalRead;
 	DWORD dwTransferBytes, dwProgress, dwLastProgress;
 	ULONGLONG dwFWSize;
+	CString szReadSector;
 
 	//------------------------------------------------------------------------------------
 	dwMaxReadWriteBytes = MAX_READWRITE_SECTORS * SECTOR_SIZE;
@@ -458,7 +476,8 @@ BOOL CRkCloneToolDlg::UploadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned int
 
 	dwFWSize = uiLen * SECTOR_SIZE;
 	dwLastProgress = dwProgress = 0;
-	m_Prog.SetPrefixStr(TEXT("Read Firmware..."));
+	szReadSector.Format(TEXT("Read [00000000/%08llX]..."),uiLen);
+	m_Prog.SetPrefixStr(szReadSector);
 	m_Prog.SetPos(0);
 
 	uiBegin = uiOffset;
@@ -489,6 +508,8 @@ BOOL CRkCloneToolDlg::UploadImage(TCHAR *szDevPath, TCHAR *szImage, unsigned int
 			goto Exit_ReadImage;
 		}
 		dwProgress = (DWORD)((dwTotalRead / 1024) * 100 / (dwFWSize / 1024));
+		szReadSector.Format(TEXT("Read [%08llX/%08llX]..."), dwTotalRead / SECTOR_SIZE, uiLen);
+		m_Prog.SetPrefixStr(szReadSector);
 		m_Prog.SetPos((WORD)dwProgress);
 		if (dwProgress != dwLastProgress)
 		{
